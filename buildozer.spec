@@ -7,6 +7,7 @@ source.include_exts = py
 source.exclude_dirs = .github,bin,.buildozer,downloads
 version = 1.0
 requirements = python3,kivy==2.3.0,yt-dlp,certifi,openssl,pyjnius,android
+p4a.branch = v2024.01.21
 orientation = portrait
 fullscreen = 0
 
