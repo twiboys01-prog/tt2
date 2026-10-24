@@ -13,7 +13,6 @@ from kivy.app import App
 from kivy.clock import Clock, mainthread
 from kivy.core.clipboard import Clipboard
 from kivy.core.window import Window
-from kivy.factory import Factory
 from kivy.graphics import Color, Ellipse, Line, Rectangle, RoundedRectangle, Triangle
 from kivy.metrics import dp, sp
 from kivy.uix.anchorlayout import AnchorLayout
@@ -23,9 +22,6 @@ from kivy.uix.button import Button
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.label import Label
 from kivy.uix.popup import Popup
-from kivy.uix.recycleboxlayout import RecycleBoxLayout
-from kivy.uix.recycleview import RecycleView
-from kivy.uix.recycleview.views import RecycleDataViewBehavior
 from kivy.uix.screenmanager import NoTransition, Screen, ScreenManager
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.switch import Switch
@@ -36,6 +32,7 @@ from kivy.utils import platform
 
 import engine
 
+HIST_PAGE = 30  # jumlah baris riwayat per halaman (supaya ringan)
 MAX_WORKERS = 2  # paralel kecil = lebih jarang kena IP-block
 
 # ---------- warna ----------
@@ -224,8 +221,8 @@ class NavButton(ButtonBehavior, BoxLayout):
         self._col.rgba = PINK if on else (0, 0, 0, 0)
 
 
-class ItemRow(RecycleDataViewBehavior, Card):
-    """Satu baris download. Dipakai ulang (recycle) supaya riwayat panjang tetap ringan."""
+class ItemRow(Card):
+    """Satu baris download (dipakai di Beranda dan Riwayat)."""
 
     def __init__(self, **kw):
         super().__init__(orientation="horizontal", padding=dp(10), spacing=dp(10), **kw)
@@ -262,12 +259,6 @@ class ItemRow(RecycleDataViewBehavior, Card):
         self.stat.text = {"ok": "Selesai", "run": "..."}.get(st, "")
         self.stat.color = GREEN if st == "ok" else PINK
 
-    def refresh_view_attrs(self, rv, index, data):
-        self.apply(data["it"])
-        return super().refresh_view_attrs(rv, index, data)
-
-
-Factory.register("ItemRow", cls=ItemRow)
 
 
 def load_json(path, default):
@@ -324,6 +315,8 @@ class DownloaderApp(App):
                                "detail": self._detail_ok(h.get("size", 0), h.get("ts", 0))})
         self.last_text = ""
         self._render_ev = None
+        self.hist_limit = HIST_PAGE
+        self._hist_sig = None
         self._hist_dirty = False
         self._wl = None
         self.clip_err_shown = False
@@ -443,12 +436,11 @@ class DownloaderApp(App):
         self.hist_empty = T("Belum ada download.", 13, GRAY, halign="center",
                             size_hint_y=None, height=dp(60))
         box.add_widget(self.hist_empty)
-        self.hist_rv = RecycleView(viewclass="ItemRow", do_scroll_x=False, bar_width=dp(3))
-        lay = RecycleBoxLayout(default_size=(None, dp(68)), default_size_hint=(1, None),
-                               size_hint_y=None, orientation="vertical", spacing=dp(8))
-        lay.bind(minimum_height=lay.setter("height"))
-        self.hist_rv.add_widget(lay)
-        box.add_widget(self.hist_rv)
+        sv = ScrollView(do_scroll_x=False)
+        self.hist_list = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
+        self.hist_list.bind(minimum_height=self.hist_list.setter("height"))
+        sv.add_widget(self.hist_list)
+        box.add_widget(sv)
         scr.add_widget(box)
         return scr
 
@@ -502,6 +494,9 @@ class DownloaderApp(App):
         return bar
 
     def show(self, name):
+        if name == "hist":
+            self.hist_limit = HIST_PAGE
+            self._hist_sig = None
         self.sm.current = name
         for k, b in self.navs.items():
             b.set_active(k == name)
@@ -660,6 +655,11 @@ class DownloaderApp(App):
 
     def enqueue(self, links):
         archive = self.archive_path if self.use_archive else None
+        if archive:
+            try:
+                engine.seed_archive(archive, engine.public_dirs())
+            except Exception:
+                pass
         running = {i["url"] for i in self.items if i["status"] == "run"}
         for url in links:
             if url in running:
@@ -760,10 +760,30 @@ class DownloaderApp(App):
         if self.sm.current == "home":
             self._fill(self.home_list, self.items[:5])
         elif self.sm.current == "hist":
-            shown = self.items[:200]
-            self.hist_empty.height = 0 if shown else dp(60)
-            self.hist_empty.opacity = 0 if shown else 1
-            self.hist_rv.data = [{"it": it} for it in shown]
+            self._fill_hist()
+
+    def _fill_hist(self):
+        shown = self.items[:self.hist_limit]
+        sig = (self.hist_limit, len(self.items),
+               tuple((id(i), i["status"], i["detail"]) for i in shown))
+        if sig == self._hist_sig:      # tidak ada perubahan -> jangan bangun ulang
+            return
+        self._hist_sig = sig
+        self.hist_empty.height = 0 if shown else dp(60)
+        self.hist_empty.opacity = 0 if shown else 1
+        self.hist_list.clear_widgets()
+        for it in shown:
+            self.hist_list.add_widget(self._row(it))
+        rest = len(self.items) - len(shown)
+        if rest > 0:
+            self.hist_list.add_widget(Button(
+                text=f"Muat lebih banyak ({rest} lagi)", font_size=sp(13), color=PINK,
+                size_hint_y=None, height=dp(46), background_normal="", background_down="",
+                background_color=PINK_SOFT, on_release=self._more_hist))
+
+    def _more_hist(self, *_):
+        self.hist_limit += HIST_PAGE
+        self.render()
 
     def _fill(self, box, items):
         box.clear_widgets()

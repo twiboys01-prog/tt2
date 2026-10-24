@@ -93,6 +93,55 @@ def public_dirs():
     return dirs
 
 
+# Nama file hasil: <uploader>_<id>.<ext> (atau ..._<id>_1.<ext> kalau dulu bentrok)
+_ID_IN_NAME = re.compile(r"(?:^|_)(\d{8,})(?=_|$)")
+
+
+def _ids_in_name(filename):
+    stem = os.path.splitext(os.path.basename(filename))[0]
+    return _ID_IN_NAME.findall(stem)
+
+
+def ids_in_folders(out_dirs):
+    """Kumpulan ID video yang SUDAH ada di folder hasil (berdasarkan nama file)."""
+    ids = set()
+    for d in out_dirs:
+        try:
+            for fn in os.listdir(d):
+                ids.update(_ids_in_name(fn))
+        except OSError:
+            continue
+    return ids
+
+
+def seed_archive(archive_path, out_dirs):
+    """
+    Isi archive dari isi folder hasil. Jadi 'lewati yang sudah pernah' tetap
+    jalan walau archive.txt hilang (app di-uninstall/reinstall, data dihapus)
+    atau videonya dulu diunduh dengan cara lain. Return jumlah baris baru.
+    """
+    if not archive_path:
+        return 0
+    ids = ids_in_folders(out_dirs)
+    if not ids:
+        return 0
+    have = set()
+    try:
+        with open(archive_path, "r", encoding="utf-8") as f:
+            have = {ln.strip() for ln in f if ln.strip()}
+    except OSError:
+        pass
+    new = [f"{k} {i}" for i in sorted(ids) for k in ("tiktok", "douyin")
+           if f"{k} {i}" not in have]
+    if new:
+        try:
+            with open(archive_path, "a", encoding="utf-8") as f:
+                f.write("\n".join(new) + "\n")
+        except OSError:
+            return 0
+    return len(new)
+
+
 def _scan_media(path):
     """Minta Android memindai file supaya muncul di Galeri."""
     if not IS_ANDROID:
@@ -251,12 +300,26 @@ def download_one(url, work_dir, out_dirs, archive_path=None, cookie_path=None):
                 return "FAIL", "selesai tanpa error tapi file tidak terbentuk", []
 
             names, infos = [], []
+            # Pengaman terakhir: kalau "lewati" aktif dan video itu ternyata sudah
+            # ada di folder hasil, buang file baru (jangan bikin salinan _1.mp4).
+            known = ids_in_folders(out_dirs) if archive_path else set()
+            dup = 0
             for p in files:
+                ids = _ids_in_name(p)
+                if known and ids and ids[-1] in known:
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass
+                    dup += 1
+                    continue
                 size = os.path.getsize(p) if os.path.exists(p) else 0
                 dst, public_ok = publish(p, out_dirs)
                 base = os.path.basename(dst)
                 infos.append((base, size))
                 names.append(base if public_ok else f"{dst} (tidak bisa ke folder publik)")
+            if not infos and dup:
+                return "SKIP", "sudah ada di folder hasil", []
             return "OK", ", ".join(names), infos
         return "FAIL", _friendly(err), []
     finally:
