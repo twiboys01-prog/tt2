@@ -34,10 +34,27 @@ RETRYABLE = [
 ]
 IP_BLOCK = "Your IP address is blocked"
 
+# Error permanen (video privat / dihapus / dibatasi) -> JANGAN diulang,
+# langsung tandai gagal lalu lanjut ke link berikutnya.
+PERMANENT = [
+    "You do not have permission to view this post",
+    "Video not available",
+    "video is private",
+    "This video is private",
+    "has been removed",
+    "Video unavailable",
+    "status code 10204",
+    "status code 10216",
+    "status code 10222",
+    "Unsupported URL",
+]
+
 MAX_ATTEMPTS = 4
 RETRY_DELAY = 5            # detik x nomor percobaan (+ jitter)
-IP_BLOCK_DELAY = 60        # cooldown khusus IP-block
+IP_BLOCK_DELAY = 30        # cooldown khusus IP-block
+IP_BLOCK_MAX_ATTEMPTS = 2  # IP-block: jangan nahan antrean terlalu lama
 INITIAL_JITTER = (0.3, 1.5)
+HARD_TIMEOUT = 300         # detik; batas keras per link supaya antrean tidak macet
 
 
 def extract_links(text):
@@ -145,6 +162,21 @@ def _clean(err):
     return err[:200] or "gagal tidak diketahui"
 
 
+def _friendly(err):
+    """Pesan singkat yang jelas untuk error permanen."""
+    if "You do not have permission to view this post" in err:
+        return "Video privat/dibatasi/dihapus (dilewati, cookies biasanya tidak membantu)"
+    if "Unsupported URL" in err:
+        return "Link tidak didukung"
+    if any(s in err for s in PERMANENT):
+        return "Video tidak tersedia / privat / dihapus"
+    return err
+
+
+def _is_permanent(err):
+    return any(s in err for s in PERMANENT)
+
+
 def _retryable(err):
     return IP_BLOCK in err or any(s in err for s in RETRYABLE)
 
@@ -203,11 +235,14 @@ def download_one(url, work_dir, out_dirs, archive_path=None, cookie_path=None):
                     ydl.extract_info(url, download=True)
             except Exception as e:
                 err = _clean(str(e))
-                if attempt < MAX_ATTEMPTS and _retryable(err):
+                if _is_permanent(err):
+                    return "FAIL", _friendly(err), []
+                limit = IP_BLOCK_MAX_ATTEMPTS if IP_BLOCK in err else MAX_ATTEMPTS
+                if attempt < limit and _retryable(err):
                     base = IP_BLOCK_DELAY if IP_BLOCK in err else RETRY_DELAY
                     time.sleep(base * attempt + random.uniform(1, 4))
                     continue
-                return "FAIL", err, []
+                return "FAIL", _friendly(err), []
 
             files = list(dict.fromkeys(saved))
             if not files:
@@ -223,10 +258,34 @@ def download_one(url, work_dir, out_dirs, archive_path=None, cookie_path=None):
                 infos.append((base, size))
                 names.append(base if public_ok else f"{dst} (tidak bisa ke folder publik)")
             return "OK", ", ".join(names), infos
-        return "FAIL", err, []
+        return "FAIL", _friendly(err), []
     finally:
         if tmp_cookie and os.path.exists(tmp_cookie):
             try:
                 os.remove(tmp_cookie)
             except OSError:
                 pass
+
+
+def download_one_safe(url, work_dir, out_dirs, archive_path=None, cookie_path=None,
+                      timeout=HARD_TIMEOUT):
+    """
+    Pembungkus download_one yang TIDAK PERNAH melempar error dan TIDAK PERNAH
+    menggantung lebih dari `timeout` detik. Apa pun yang terjadi, hasilnya
+    selalu (status, pesan, files) sehingga antrean bulk lanjut ke link berikutnya.
+    """
+    import threading
+    box = {}
+
+    def run():
+        try:
+            box["r"] = download_one(url, work_dir, out_dirs, archive_path, cookie_path)
+        except BaseException as ex:  # termasuk SystemExit dari library
+            box["r"] = ("FAIL", _friendly(_clean(str(ex) or repr(ex))), [])
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        return "FAIL", f"timeout > {timeout} detik (dilewati)", []
+    return box.get("r", ("FAIL", "gagal tidak diketahui", []))
