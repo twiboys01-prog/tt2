@@ -583,31 +583,42 @@ class DownloaderApp(App):
         self.render()
 
     def _job(self, it, archive):
+        # Apa pun yang terjadi pada SATU link (gagal, error aneh, hang),
+        # worker harus selalu lanjut ke link berikutnya di antrean.
+        status, msg, files = "FAIL", "gagal tidak diketahui", []
         try:
-            status, msg, files = engine.download_one(
+            status, msg, files = engine.download_one_safe(
                 it["url"], self.work_dir, engine.public_dirs(),
                 archive_path=archive, cookie_path=self.cookie_path)
-        except Exception as e:
-            status, msg, files = "FAIL", str(e)[:200], []
-        self._job_done(it, status, msg, files)
+        except BaseException as e:
+            status, msg, files = "FAIL", (str(e) or repr(e))[:200], []
+        finally:
+            self._job_done(it, status, msg, files)
 
     @mainthread
     def _job_done(self, it, status, msg, files):
         it["ts"] = time.time()
-        if status == "OK":
-            self.stats["ok"] += 1
-            size = sum(s for _, s in files)
-            it.update(status="ok", size=size,
-                      name=files[0][0] if len(files) == 1 else f"{len(files)} video",
-                      detail=self._detail_ok(size, it["ts"]))
-            self.save_history()
-        elif status == "SKIP":
-            self.stats["skip"] += 1
-            it.update(status="skip", detail="Sudah pernah didownload (dilewati)")
-        else:
-            self.stats["fail"] += 1
-            it.update(status="fail", detail=msg[:90])
-        self.render()
+        try:
+            if status == "OK":
+                self.stats["ok"] += 1
+                size = sum(s for _, s in files)
+                it.update(status="ok", size=size,
+                          name=files[0][0] if len(files) == 1 else f"{len(files)} video",
+                          detail=self._detail_ok(size, it["ts"]))
+                self.save_history()
+            elif status == "SKIP":
+                self.stats["skip"] += 1
+                it.update(status="skip", detail="Sudah pernah didownload (dilewati)")
+            else:
+                self.stats["fail"] += 1
+                it.update(status="fail", detail=(msg or "gagal")[:90])
+        except Exception as e:
+            # jangan sampai error tampilan membuat item nyangkut di "Mengunduh..."
+            it.update(status="fail", detail=("error internal: " + repr(e))[:90])
+        try:
+            self.render()
+        except Exception:
+            pass
 
     def _detail_ok(self, size, ts):
         when = time.strftime("%d/%m %H:%M", time.localtime(ts)) if ts else ""
