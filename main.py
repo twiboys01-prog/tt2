@@ -13,6 +13,7 @@ from kivy.app import App
 from kivy.clock import Clock, mainthread
 from kivy.core.clipboard import Clipboard
 from kivy.core.window import Window
+from kivy.factory import Factory
 from kivy.graphics import Color, Ellipse, Line, Rectangle, RoundedRectangle, Triangle
 from kivy.metrics import dp, sp
 from kivy.uix.anchorlayout import AnchorLayout
@@ -22,6 +23,9 @@ from kivy.uix.button import Button
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.label import Label
 from kivy.uix.popup import Popup
+from kivy.uix.recycleboxlayout import RecycleBoxLayout
+from kivy.uix.recycleview import RecycleView
+from kivy.uix.recycleview.views import RecycleDataViewBehavior
 from kivy.uix.screenmanager import NoTransition, Screen, ScreenManager
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.switch import Switch
@@ -220,6 +224,52 @@ class NavButton(ButtonBehavior, BoxLayout):
         self._col.rgba = PINK if on else (0, 0, 0, 0)
 
 
+class ItemRow(RecycleDataViewBehavior, Card):
+    """Satu baris download. Dipakai ulang (recycle) supaya riwayat panjang tetap ringan."""
+
+    def __init__(self, **kw):
+        super().__init__(orientation="horizontal", padding=dp(10), spacing=dp(10), **kw)
+        self.it = None
+        self.add_widget(Icon("play", PINK, PINK_SOFT, size_hint=(None, None),
+                             size=(dp(46), dp(46)), pos_hint={"center_y": .5}))
+        col = BoxLayout(orientation="vertical")
+        self.t1 = T("", 14, INK, True, shorten=True, shorten_from="right")
+        self.t2 = T("", 11, GRAY, shorten=True, shorten_from="right")
+        col.add_widget(self.t1)
+        col.add_widget(self.t2)
+        self.add_widget(col)
+        right = AnchorLayout(size_hint_x=None, width=dp(72))
+        self.stat = T("", 12, GREEN, True, "right")
+        self.btn = RoundButton(text="Ulangi", font_size=sp(12), size_hint=(None, None),
+                               size=(dp(70), dp(34)), radius=dp(17),
+                               on_release=self._retry)
+        right.add_widget(self.stat)
+        right.add_widget(self.btn)
+        self.add_widget(right)
+
+    def _retry(self, *_):
+        if self.it is not None:
+            App.get_running_app().retry(self.it)
+
+    def apply(self, it):
+        self.it = it
+        st = it["status"]
+        self.t1.text = it["name"]
+        self.t2.text = it["detail"]
+        self.t2.color = {"fail": RED, "ok": GRAY, "skip": GRAY, "run": PINK}[st]
+        self.btn.opacity = 1 if st == "fail" else 0
+        self.btn.disabled = st != "fail"
+        self.stat.text = {"ok": "Selesai", "run": "..."}.get(st, "")
+        self.stat.color = GREEN if st == "ok" else PINK
+
+    def refresh_view_attrs(self, rv, index, data):
+        self.apply(data["it"])
+        return super().refresh_view_attrs(rv, index, data)
+
+
+Factory.register("ItemRow", cls=ItemRow)
+
+
 def load_json(path, default):
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -273,6 +323,9 @@ class DownloaderApp(App):
                                "status": "ok", "size": h.get("size", 0), "ts": h.get("ts", 0),
                                "detail": self._detail_ok(h.get("size", 0), h.get("ts", 0))})
         self.last_text = ""
+        self._render_ev = None
+        self._hist_dirty = False
+        self._wl = None
         self.clip_err_shown = False
         self.use_kivy_clip = False
 
@@ -387,11 +440,15 @@ class DownloaderApp(App):
         scr = Screen(name="hist")
         box = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(10))
         box.add_widget(T("Riwayat", 22, INK, True, size_hint_y=None, height=dp(40)))
-        sv = ScrollView(do_scroll_x=False)
-        self.hist_list = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
-        self.hist_list.bind(minimum_height=self.hist_list.setter("height"))
-        sv.add_widget(self.hist_list)
-        box.add_widget(sv)
+        self.hist_empty = T("Belum ada download.", 13, GRAY, halign="center",
+                            size_hint_y=None, height=dp(60))
+        box.add_widget(self.hist_empty)
+        self.hist_rv = RecycleView(viewclass="ItemRow", do_scroll_x=False, bar_width=dp(3))
+        lay = RecycleBoxLayout(default_size=(None, dp(68)), default_size_hint=(1, None),
+                               size_hint_y=None, orientation="vertical", spacing=dp(8))
+        lay.bind(minimum_height=lay.setter("height"))
+        self.hist_rv.add_widget(lay)
+        box.add_widget(self.hist_rv)
         scr.add_widget(box)
         return scr
 
@@ -463,14 +520,45 @@ class DownloaderApp(App):
         Clock.schedule_once(self.poll_clipboard, 0.3)
 
     def on_pause(self):
+        self.save_history()
         return True  # wajib di Android supaya app tidak dimatikan saat pindah app
 
     def on_resume(self):
         self.request_clip(False)
         Clock.schedule_once(self.poll_clipboard, 0.4)
+        # Paksa gambar ulang: setelah balik dari background layar kadang kosong.
+        Clock.schedule_once(self._redraw, 0.2)
+
+    def _redraw(self, dt):
+        self.render()
+        try:
+            Window.canvas.ask_update()
+            self.sm.canvas.ask_update()
+        except Exception:
+            pass
 
     def on_stop(self):
+        self._wake(False)
         self.pool.shutdown(wait=False, cancel_futures=True)
+
+    def _wake(self, on):
+        """Tahan CPU tetap hidup selama ada antrean, supaya download tidak
+        ikut tidur saat layar mati / app di background."""
+        if platform != "android":
+            return
+        try:
+            if on and self._wl is None:
+                from jnius import autoclass
+                activity = autoclass("org.kivy.android.PythonActivity").mActivity
+                ctx = autoclass("android.content.Context")
+                pm = activity.getSystemService(ctx.POWER_SERVICE)
+                self._wl = pm.newWakeLock(1, "tiktokdl:download")  # 1 = PARTIAL_WAKE_LOCK
+                self._wl.acquire()
+            elif not on and self._wl is not None:
+                self._wl.release()
+                self._wl = None
+        except Exception:
+            self._wl = None
 
     # ---------- pengaturan ----------
     def set_opt(self, key, val):
@@ -605,7 +693,7 @@ class DownloaderApp(App):
                 it.update(status="ok", size=size,
                           name=files[0][0] if len(files) == 1 else f"{len(files)} video",
                           detail=self._detail_ok(size, it["ts"]))
-                self.save_history()
+                self._hist_dirty = True
             elif status == "SKIP":
                 self.stats["skip"] += 1
                 it.update(status="skip", detail="Sudah pernah didownload (dilewati)")
@@ -615,6 +703,19 @@ class DownloaderApp(App):
         except Exception as e:
             # jangan sampai error tampilan membuat item nyangkut di "Mengunduh..."
             it.update(status="fail", detail=("error internal: " + repr(e))[:90])
+        self.request_render()
+
+    def request_render(self):
+        """Gabungkan banyak update jadi SATU render. Tanpa ini, 80 link selesai
+        = 80x bongkar-pasang daftar, dan menumpuk saat app di background."""
+        if self._render_ev is None:
+            self._render_ev = Clock.schedule_once(self._do_render, 0.5)
+
+    def _do_render(self, dt):
+        self._render_ev = None
+        if self._hist_dirty:
+            self._hist_dirty = False
+            self.save_history()
         try:
             self.render()
         except Exception:
@@ -654,11 +755,15 @@ class DownloaderApp(App):
         self.lbl_count.text = f"Berhasil {s['ok']}  •  Dilewati {s['skip']}  •  Gagal {s['fail']}"
         self.btn_retry_all.opacity = 1 if fails else 0
         self.btn_retry_all.disabled = not fails
+        self._wake(pending > 0)
 
         if self.sm.current == "home":
             self._fill(self.home_list, self.items[:5])
         elif self.sm.current == "hist":
-            self._fill(self.hist_list, self.items[:200])
+            shown = self.items[:200]
+            self.hist_empty.height = 0 if shown else dp(60)
+            self.hist_empty.opacity = 0 if shown else 1
+            self.hist_rv.data = [{"it": it} for it in shown]
 
     def _fill(self, box, items):
         box.clear_widgets()
@@ -670,23 +775,8 @@ class DownloaderApp(App):
             box.add_widget(self._row(it))
 
     def _row(self, it):
-        row = Card(size_hint_y=None, height=dp(68), padding=dp(10), spacing=dp(10))
-        row.add_widget(Icon("play", PINK, PINK_SOFT, size_hint=(None, None),
-                            size=(dp(46), dp(46)), pos_hint={"center_y": .5}))
-        col = BoxLayout(orientation="vertical")
-        t = T(it["name"], 14, INK, True, shorten=True, shorten_from="right")
-        col.add_widget(t)
-        color = {"fail": RED, "ok": GRAY, "skip": GRAY, "run": PINK}[it["status"]]
-        col.add_widget(T(it["detail"], 11, color, shorten=True, shorten_from="right"))
-        row.add_widget(col)
-        if it["status"] == "fail":
-            row.add_widget(RoundButton(text="Ulangi", font_size=sp(12), size_hint=(None, None),
-                                       size=(dp(70), dp(34)), pos_hint={"center_y": .5},
-                                       radius=dp(17), on_release=lambda *_: self.retry(it)))
-        elif it["status"] == "ok":
-            row.add_widget(T("Selesai", 12, GREEN, True, "right", size_hint_x=None, width=dp(60)))
-        elif it["status"] == "run":
-            row.add_widget(T("...", 16, PINK, True, "right", size_hint_x=None, width=dp(40)))
+        row = ItemRow(size_hint_y=None, height=dp(68))
+        row.apply(it)
         return row
 
     # ---------- cookies (opsional, untuk Douyin) ----------
