@@ -177,7 +177,9 @@ def _opts(work_dir, archive_path, cookie, variant, logger, saved):
 
 def download_one(url, work_dir, out_dirs, archive_path=None, cookie_path=None):
     """
-    Download satu link. Return (status, pesan); status: "OK" / "SKIP" / "FAIL".
+    Download satu link. Return (status, pesan, files)
+      status: "OK" / "SKIP" / "FAIL"
+      files : list (nama_file, ukuran_byte) -- hanya terisi kalau OK
     """
     os.makedirs(work_dir, exist_ok=True)
 
@@ -205,20 +207,23 @@ def download_one(url, work_dir, out_dirs, archive_path=None, cookie_path=None):
                     base = IP_BLOCK_DELAY if IP_BLOCK in err else RETRY_DELAY
                     time.sleep(base * attempt + random.uniform(1, 4))
                     continue
-                return "FAIL", err
+                return "FAIL", err, []
 
             files = list(dict.fromkeys(saved))
             if not files:
                 if logger.skipped:
-                    return "SKIP", "sudah pernah didownload"
-                return "FAIL", "selesai tanpa error tapi file tidak terbentuk"
+                    return "SKIP", "sudah pernah didownload", []
+                return "FAIL", "selesai tanpa error tapi file tidak terbentuk", []
 
-            names = []
+            names, infos = [], []
             for p in files:
+                size = os.path.getsize(p) if os.path.exists(p) else 0
                 dst, public_ok = publish(p, out_dirs)
-                names.append(os.path.basename(dst) if public_ok else f"{dst} (tidak bisa ke folder publik)")
-            return "OK", ", ".join(names)
-        return "FAIL", err
+                base = os.path.basename(dst)
+                infos.append((base, size))
+                names.append(base if public_ok else f"{dst} (tidak bisa ke folder publik)")
+            return "OK", ", ".join(names), infos
+        return "FAIL", err, []
     finally:
         if tmp_cookie and os.path.exists(tmp_cookie):
             try:
