@@ -433,9 +433,6 @@ class DownloaderApp(App):
         scr = Screen(name="hist")
         box = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(10))
         box.add_widget(T("Riwayat", 22, INK, True, size_hint_y=None, height=dp(40)))
-        self.hist_empty = T("Belum ada download.", 13, GRAY, halign="center",
-                            size_hint_y=None, height=dp(60))
-        box.add_widget(self.hist_empty)
         sv = ScrollView(do_scroll_x=False)
         self.hist_list = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
         self.hist_list.bind(minimum_height=self.hist_list.setter("height"))
@@ -500,7 +497,34 @@ class DownloaderApp(App):
         self.sm.current = name
         for k, b in self.navs.items():
             b.set_active(k == name)
-        self.render()
+        self.safe_render()
+        # ScreenManager baru benar-benar memasang layar di frame berikutnya;
+        # gambar ulang di situ supaya daftar tidak kosong / tidak tergambar.
+        Clock.schedule_once(self._after_switch, 0.15)
+
+    def _after_switch(self, dt):
+        self._hist_sig = None
+        self.safe_render()
+        try:
+            self.sm.canvas.ask_update()
+        except Exception:
+            pass
+
+    def safe_render(self):
+        """render() yang tidak pernah diam-diam gagal: kalau error, tampil di layar."""
+        try:
+            self.render()
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self._hist_sig = None
+            msg = "Gagal menampilkan daftar: " + repr(e)[:160]
+            try:
+                self.hist_list.clear_widgets()
+                self.hist_list.add_widget(T(msg, 12, RED, size_hint_y=None, height=dp(90)))
+                self.flash(msg, RED)
+            except Exception:
+                pass
 
     # ---------- lifecycle ----------
     def on_start(self):
@@ -525,7 +549,7 @@ class DownloaderApp(App):
         Clock.schedule_once(self._redraw, 0.2)
 
     def _redraw(self, dt):
-        self.render()
+        self.safe_render()
         try:
             Window.canvas.ask_update()
             self.sm.canvas.ask_update()
@@ -699,7 +723,7 @@ class DownloaderApp(App):
                 it.update(status="skip", detail="Sudah pernah didownload (dilewati)")
             else:
                 self.stats["fail"] += 1
-                it.update(status="fail", detail=(msg or "gagal")[:90])
+                it.update(status="fail", detail=(msg or "gagal")[:160])
         except Exception as e:
             # jangan sampai error tampilan membuat item nyangkut di "Mengunduh..."
             it.update(status="fail", detail=("error internal: " + repr(e))[:90])
@@ -716,10 +740,7 @@ class DownloaderApp(App):
         if self._hist_dirty:
             self._hist_dirty = False
             self.save_history()
-        try:
-            self.render()
-        except Exception:
-            pass
+        self.safe_render()
 
     def _detail_ok(self, size, ts):
         when = time.strftime("%d/%m %H:%M", time.localtime(ts)) if ts else ""
@@ -769,9 +790,11 @@ class DownloaderApp(App):
         if sig == self._hist_sig:      # tidak ada perubahan -> jangan bangun ulang
             return
         self._hist_sig = sig
-        self.hist_empty.height = 0 if shown else dp(60)
-        self.hist_empty.opacity = 0 if shown else 1
         self.hist_list.clear_widgets()
+        if not shown:
+            self.hist_list.add_widget(T("Belum ada download.", 13, GRAY, halign="center",
+                                        size_hint_y=None, height=dp(60)))
+            return
         for it in shown:
             self.hist_list.add_widget(self._row(it))
         rest = len(self.items) - len(shown)
