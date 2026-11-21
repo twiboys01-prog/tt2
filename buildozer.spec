@@ -3,7 +3,7 @@ title = TikTok DL
 package.name = tiktokdl
 package.domain = org.jea
 source.dir = .
-source.include_exts = py
+source.include_exts = py,ttf
 source.exclude_dirs = .github,bin,.buildozer,downloads
 version = 1.0
 requirements = python3,kivy==2.3.0,yt-dlp,certifi,openssl,pyjnius,android

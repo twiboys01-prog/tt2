@@ -12,6 +12,7 @@ import concurrent.futures
 from kivy.app import App
 from kivy.clock import Clock, mainthread
 from kivy.core.clipboard import Clipboard
+from kivy.core.text import LabelBase
 from kivy.core.window import Window
 from kivy.graphics import Color, Ellipse, Line, Rectangle, RoundedRectangle, Triangle
 from kivy.metrics import dp, sp
@@ -35,19 +36,35 @@ import engine
 HIST_PAGE = 30  # jumlah baris riwayat per halaman (supaya ringan)
 MAX_WORKERS = 2  # paralel kecil = lebih jarang kena IP-block
 
-# ---------- warna ----------
-PINK = (0.996, 0.173, 0.333, 1)
-PINK_SOFT = (1.0, 0.925, 0.945, 1)
-INK = (0.07, 0.07, 0.10, 1)
-GRAY = (0.45, 0.47, 0.55, 1)
-BG = (0.935, 0.94, 0.962, 1)
-SOFT = (0.94, 0.945, 0.965, 1)
+# ---------- warna (palet "Cathartic Moments": gelap + lavender) ----------
+ACCENT = (0.800, 0.729, 0.925, 1)        # lavender  #CCBAEC
+ACCENT_SOFT = (0.165, 0.150, 0.225, 1)   # lavender gelap (latar tombol / ikon)
+CREAM = (0.953, 0.949, 0.933, 1)         # teks utama #F3F2EE
+INK = CREAM
+GRAY = (0.729, 0.718, 0.760, 1)          # teks sekunder #BAB7C2
+BG = (0.059, 0.055, 0.078, 1)            # latar #0F0E14
+SURFACE = (0.090, 0.085, 0.120, 1)       # kartu
+SOFT = (0.125, 0.118, 0.160, 1)          # kolom input / tombol tidak aktif
 WHITE = (1, 1, 1, 1)
-GREEN = (0.10, 0.60, 0.35, 1)
-RED = (0.85, 0.20, 0.25, 1)
-TEAL, TEAL_SOFT = (0.10, 0.65, 0.60, 1), (0.88, 0.97, 0.95, 1)
-PURPLE, PURPLE_SOFT = (0.45, 0.35, 0.80, 1), (0.93, 0.91, 0.98, 1)
-BLUE, BLUE_SOFT = (0.20, 0.55, 0.85, 1), (0.90, 0.95, 0.99, 1)
+GREEN = (0.560, 0.850, 0.660, 1)
+RED = (0.960, 0.450, 0.480, 1)
+TEAL, TEAL_SOFT = (0.620, 0.850, 0.800, 1), (0.110, 0.185, 0.185, 1)
+PURPLE, PURPLE_SOFT = ACCENT, ACCENT_SOFT
+BLUE, BLUE_SOFT = (0.620, 0.760, 0.950, 1), (0.120, 0.160, 0.235, 1)
+
+# ---------- font (sama dengan slide: Newsreader serif + Space Grotesk sans) ----------
+_FD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+# Menimpa "Roboto" = font bawaan Kivy, jadi semua widget otomatis pakai Space Grotesk.
+LabelBase.register(
+    name="Roboto",
+    fn_regular=os.path.join(_FD, "SpaceGrotesk-Regular.ttf"),
+    fn_bold=os.path.join(_FD, "SpaceGrotesk-Medium.ttf"))
+LabelBase.register(
+    name="Serif",
+    fn_regular=os.path.join(_FD, "Newsreader-Regular.ttf"),
+    fn_italic=os.path.join(_FD, "Newsreader-Italic.ttf"),
+    fn_bold=os.path.join(_FD, "Newsreader-Medium.ttf"),
+    fn_bolditalic=os.path.join(_FD, "Newsreader-MediumItalic.ttf"))
 
 
 # ====================== clipboard (Android) ======================
@@ -108,7 +125,7 @@ def T(text, size=14, color=INK, bold=False, halign="left", **kw):
 
 
 class Card(BoxLayout):
-    def __init__(self, bg=WHITE, radius=dp(20), **kw):
+    def __init__(self, bg=SURFACE, radius=dp(20), **kw):
         super().__init__(**kw)
         with self.canvas.before:
             Color(*bg)
@@ -120,7 +137,7 @@ class Card(BoxLayout):
 
 
 class RoundButton(Button):
-    def __init__(self, bg=PINK, fg=WHITE, radius=dp(26), **kw):
+    def __init__(self, bg=ACCENT, fg=BG, radius=dp(26), **kw):
         kw.setdefault("bold", True)
         super().__init__(background_normal="", background_down="",
                          background_color=(0, 0, 0, 0), color=fg, **kw)
@@ -152,14 +169,14 @@ class Seg(ToggleButton):
     def _sync(self, *_):
         self._rect.pos, self._rect.size = self.pos, self.size
         on = self.state == "down"
-        self._col.rgba = PINK if on else SOFT
-        self.color = WHITE if on else GRAY
+        self._col.rgba = ACCENT if on else SOFT
+        self.color = BG if on else GRAY
 
 
 class Icon(Widget):
     """Ikon sederhana yang digambar dengan canvas (tanpa file gambar)."""
 
-    def __init__(self, kind, tint=PINK, bg=PINK_SOFT, **kw):
+    def __init__(self, kind, tint=ACCENT, bg=ACCENT_SOFT, **kw):
         super().__init__(**kw)
         self.kind, self.tint, self.bgc = kind, tint, bg
         self.bind(pos=self.redraw, size=self.redraw)
@@ -173,11 +190,11 @@ class Icon(Widget):
         lw = dp(1.6)
         with self.canvas:
             if self.kind == "logo":
-                Color(0.05, 0.05, 0.08, 1)
+                Color(0.13, 0.12, 0.18, 1)
                 RoundedRectangle(pos=(cx - r, cy - r), size=(s, s), radius=[dp(14)])
-                Color(0.15, 0.85, 0.85, 1)
+                Color(0.42, 0.36, 0.62, 1)
                 Triangle(points=[cx - r * .22, cy - r * .35, cx - r * .22, cy + r * .35, cx + r * .38, cy])
-                Color(*PINK)
+                Color(*ACCENT)
                 Triangle(points=[cx - r * .14, cy - r * .35, cx - r * .14, cy + r * .35, cx + r * .46, cy])
                 Color(1, 1, 1, 1)
                 Triangle(points=[cx - r * .18, cy - r * .35, cx - r * .18, cy + r * .35, cx + r * .42, cy])
@@ -208,7 +225,7 @@ class NavButton(ButtonBehavior, BoxLayout):
             self._rect = RoundedRectangle(pos=self.mark.pos, size=self.mark.size, radius=[dp(2)])
         self.mark.bind(pos=self._sync, size=self._sync)
         anchor.add_widget(self.mark)
-        self.lbl = Label(text=text, font_size=sp(12), color=GRAY)
+        self.lbl = Label(text=text.upper(), font_size=sp(11), color=GRAY)
         self.add_widget(anchor)
         self.add_widget(self.lbl)
 
@@ -216,9 +233,9 @@ class NavButton(ButtonBehavior, BoxLayout):
         self._rect.pos, self._rect.size = self.mark.pos, self.mark.size
 
     def set_active(self, on):
-        self.lbl.color = PINK if on else GRAY
+        self.lbl.color = ACCENT if on else GRAY
         self.lbl.bold = on
-        self._col.rgba = PINK if on else (0, 0, 0, 0)
+        self._col.rgba = ACCENT if on else (0, 0, 0, 0)
 
 
 class ItemRow(Card):
@@ -227,7 +244,7 @@ class ItemRow(Card):
     def __init__(self, **kw):
         super().__init__(orientation="horizontal", padding=dp(10), spacing=dp(10), **kw)
         self.it = None
-        self.add_widget(Icon("play", PINK, PINK_SOFT, size_hint=(None, None),
+        self.add_widget(Icon("play", ACCENT, ACCENT_SOFT, size_hint=(None, None),
                              size=(dp(46), dp(46)), pos_hint={"center_y": .5}))
         col = BoxLayout(orientation="vertical")
         self.t1 = T("", 14, INK, True, shorten=True, shorten_from="right")
@@ -253,11 +270,11 @@ class ItemRow(Card):
         st = it["status"]
         self.t1.text = it["name"]
         self.t2.text = it["detail"]
-        self.t2.color = {"fail": RED, "ok": GRAY, "skip": GRAY, "run": PINK}[st]
+        self.t2.color = {"fail": RED, "ok": GRAY, "skip": GRAY, "run": ACCENT}[st]
         self.btn.opacity = 1 if st == "fail" else 0
         self.btn.disabled = st != "fail"
         self.stat.text = {"ok": "Selesai", "run": "..."}.get(st, "")
-        self.stat.color = GREEN if st == "ok" else PINK
+        self.stat.color = GREEN if st == "ok" else ACCENT
 
 
 
@@ -342,10 +359,14 @@ class DownloaderApp(App):
         g.bind(minimum_height=g.setter("height"))
 
         # header
-        head = BoxLayout(size_hint_y=None, height=dp(56), spacing=dp(12))
+        head = BoxLayout(size_hint_y=None, height=dp(60), spacing=dp(12))
         head.add_widget(Icon("logo", size_hint=(None, None), size=(dp(48), dp(48)),
                              pos_hint={"center_y": .5}))
-        head.add_widget(T("[b]TikTok[/b] [color=7a7f8c]Downloader[/color]", 24, markup=True))
+        title = BoxLayout(orientation="vertical")
+        title.add_widget(T("TIKTOK  /  DOUYIN", 10, GRAY, size_hint_y=None, height=dp(16)))
+        title.add_widget(T("TikTok [i][color=ccbaec]Downloader[/color][/i]", 30, CREAM,
+                           font_name="Serif", markup=True))
+        head.add_widget(title)
         g.add_widget(head)
         g.add_widget(T("Simpan video TikTok & Douyin favoritmu dengan cepat dan mudah.", 13, GRAY,
                        size_hint_y=None, height=dp(34)))
@@ -366,12 +387,12 @@ class DownloaderApp(App):
                          padding=[dp(8), dp(6), dp(6), dp(6)], spacing=dp(6))
         self.field = TextInput(multiline=False, font_size=sp(14), background_normal="",
                                background_active="", background_color=(0, 0, 0, 0),
-                               foreground_color=INK, hint_text_color=(0.55, 0.57, 0.65, 1),
-                               cursor_color=PINK, padding=[dp(6), dp(14)])
+                               foreground_color=CREAM, hint_text_color=(0.50, 0.49, 0.56, 1),
+                               cursor_color=ACCENT, padding=[dp(6), dp(14)])
         self.field.bind(text=self.on_field_text, on_text_validate=lambda *_: self.start_download())
         self.pill.add_widget(self.field)
         anc = AnchorLayout(size_hint_x=None, width=dp(74), anchor_y="center")
-        anc.add_widget(RoundButton(text="Tempel", bg=PINK_SOFT, fg=PINK, font_size=sp(13),
+        anc.add_widget(RoundButton(text="Tempel", bg=ACCENT_SOFT, fg=ACCENT, font_size=sp(13),
                                    size_hint_y=None, height=dp(36), radius=dp(18),
                                    on_release=self.on_paste))
         self.pill.add_widget(anc)
@@ -387,7 +408,7 @@ class DownloaderApp(App):
         # fitur
         feats = GridLayout(cols=4, size_hint_y=None, height=dp(96))
         for kind, tint, soft, a, b in (
-                ("hd", PINK, PINK_SOFT, "Kualitas HD", "Terbaik"),
+                ("hd", ACCENT, ACCENT_SOFT, "Kualitas HD", "Terbaik"),
                 ("bolt", TEAL, TEAL_SOFT, "Cepat", "Hitungan detik"),
                 ("nowm", PURPLE, PURPLE_SOFT, "Tanpa Logo", "Video bersih"),
                 ("phone", BLUE, BLUE_SOFT, "Semua HP", "Android")):
@@ -400,9 +421,9 @@ class DownloaderApp(App):
         g.add_widget(feats)
 
         # kartu status
-        sc = Card(bg=PINK_SOFT, size_hint_y=None, height=dp(84), padding=dp(14), spacing=dp(8))
+        sc = Card(bg=ACCENT_SOFT, size_hint_y=None, height=dp(84), padding=dp(14), spacing=dp(8))
         col = BoxLayout(orientation="vertical")
-        self.lbl_state = T("Siap mengunduh", 15, INK, True)
+        self.lbl_state = T("Siap mengunduh", 21, CREAM, font_name="Serif")
         self.lbl_count = T("", 12, GRAY)
         col.add_widget(self.lbl_state)
         col.add_widget(self.lbl_count)
@@ -414,9 +435,9 @@ class DownloaderApp(App):
         g.add_widget(sc)
 
         # daftar terbaru
-        hdr = BoxLayout(size_hint_y=None, height=dp(30))
-        hdr.add_widget(T("Terbaru", 16, INK, True))
-        hdr.add_widget(Button(text="Lihat semua >", font_size=sp(12), color=GRAY, size_hint_x=None,
+        hdr = BoxLayout(size_hint_y=None, height=dp(36))
+        hdr.add_widget(T("Terbaru", 24, CREAM, font_name="Serif"))
+        hdr.add_widget(Button(text="LIHAT SEMUA  >", font_size=sp(11), color=ACCENT, size_hint_x=None,
                               width=dp(110), background_normal="", background_down="",
                               background_color=(0, 0, 0, 0), on_release=lambda *_: self.show("hist")))
         g.add_widget(hdr)
@@ -432,7 +453,7 @@ class DownloaderApp(App):
     def _build_history(self):
         scr = Screen(name="hist")
         box = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(10))
-        box.add_widget(T("Riwayat", 22, INK, True, size_hint_y=None, height=dp(40)))
+        box.add_widget(T("Riwayat", 30, CREAM, font_name="Serif", size_hint_y=None, height=dp(48)))
         sv = ScrollView(do_scroll_x=False)
         self.hist_list = GridLayout(cols=1, spacing=dp(8), size_hint_y=None)
         self.hist_list.bind(minimum_height=self.hist_list.setter("height"))
@@ -445,7 +466,7 @@ class DownloaderApp(App):
     def _build_settings(self):
         scr = Screen(name="set")
         box = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(12))
-        box.add_widget(T("Atur", 22, INK, True, size_hint_y=None, height=dp(40)))
+        box.add_widget(T("Atur", 30, CREAM, font_name="Serif", size_hint_y=None, height=dp(48)))
 
         def row(title, sub, active, cb):
             c = Card(size_hint_y=None, height=dp(72), padding=dp(14), spacing=dp(8))
@@ -468,7 +489,7 @@ class DownloaderApp(App):
         col.add_widget(T("Cookies (opsional)", 14, INK, True))
         col.add_widget(T("Untuk Douyin yang meminta cookies", 11, GRAY))
         c.add_widget(col)
-        c.add_widget(RoundButton(text="Atur", bg=PINK_SOFT, fg=PINK, size_hint=(None, None),
+        c.add_widget(RoundButton(text="Atur", bg=ACCENT_SOFT, fg=ACCENT, size_hint=(None, None),
                                  size=(dp(80), dp(38)), pos_hint={"center_y": .5}, radius=dp(19),
                                  on_release=self.open_cookies))
         box.add_widget(c)
@@ -481,7 +502,7 @@ class DownloaderApp(App):
         return scr
 
     def _build_nav(self):
-        bar = Card(bg=WHITE, radius=0, size_hint_y=None, height=dp(58))
+        bar = Card(bg=SURFACE, radius=0, size_hint_y=None, height=dp(58))
         self.navs = {}
         for key, text in (("home", "Beranda"), ("hist", "Riwayat"), ("set", "Atur")):
             b = NavButton(text)
@@ -800,9 +821,9 @@ class DownloaderApp(App):
         rest = len(self.items) - len(shown)
         if rest > 0:
             self.hist_list.add_widget(Button(
-                text=f"Muat lebih banyak ({rest} lagi)", font_size=sp(13), color=PINK,
+                text=f"Muat lebih banyak ({rest} lagi)", font_size=sp(13), color=ACCENT,
                 size_hint_y=None, height=dp(46), background_normal="", background_down="",
-                background_color=PINK_SOFT, on_release=self._more_hist))
+                background_color=ACCENT_SOFT, on_release=self._more_hist))
 
     def _more_hist(self, *_):
         self.hist_limit += HIST_PAGE
